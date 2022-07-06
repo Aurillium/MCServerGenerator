@@ -1,10 +1,13 @@
 #!/usr/bin/python3
-from enum import Enum
+import datetime
 import argparse
 import requests
 import hashlib
+import zipfile
 import shutil
 import shlex
+import enum
+import time
 import sys
 import os
 import re
@@ -13,6 +16,8 @@ LATEST = None
 VERSIONS = []
 WRITTEN_FILES = []
 DIRS_CREATED = []
+PROPERTIES = {}
+GEYSER_CONFIG = {}
 
 def warn(message):
   print("Warning: " + message)
@@ -35,11 +40,14 @@ def fatal(message):
 def info(message):
   print("Info: " + message)
 
-class ErrorLevel(Enum):
+class ErrorLevel(enum.Enum):
   INFO = info
   WARN = warn
   WARNING = warn
   FATAL = fatal
+
+def get_mojang_timestamp():
+  return datetime.datetime.now().strftime("%a %b %d %H:%M:%S " + time.tzname[time.daylight] + " %Y")
 
 def get_software(software=""):
   software = software.strip().lower()
@@ -130,7 +138,41 @@ def get_spigot_geyser(directory):
   info("Downloading Geyser for Spigot...")
   makedirs(os.path.join(directory, "plugins"))
   r = get_url("https://ci.opencollab.dev//job/GeyserMC/job/Geyser/job/master/lastSuccessfulBuild/artifact/bootstrap/spigot/target/Geyser-Spigot.jar")
-  save_file(os.path.join(directory, "plugins", "Geyser-Spigot.jar"), r.content)
+  geyser_jar = os.path.join(directory, "plugins", "Geyser-Spigot.jar")
+  save_file(geyser_jar, r.content)
+  info("Setting up configuration...")
+  with zipfile.ZipFile(geyser_jar) as f:
+    f.extract("config.yml", os.path.join(directory, "plugins", "Geyser-Spigot"))
+  config_file = os.path.join(directory, "plugins", "Geyser-Spigot", "config.yml")
+  lines = []
+  with open(config_file) as f:
+    level = ""
+    prev_indent = 0
+    for line in f:
+      if "#" in line:
+        active_line, comment = line.split("#", 1)
+      else:
+        active_line = line
+        comment = None
+      if not active_line.strip():
+        lines.append(line)
+        continue
+      indent = len(line) - len(line.lstrip())
+      if indent > prev_indent:
+        level = level + "." + key
+      if indent < prev_indent:
+        level = ".".join(level.split(".")[:-1])
+      prev_indent = indent
+      if ":" in active_line:
+        key, value = active_line.strip().split(":", 1)
+        true_key = level + "." + key
+        if true_key[1:] in GEYSER_CONFIG:
+          lines.append(" " * indent + key + ": " + GEYSER_CONFIG[true_key[1:]] + (" #" + comment if comment else "\n"))
+        else:
+          lines.append(line)
+      else:
+        lines.append(line)
+  save_file(config_file, "".join(lines))
   info("Installed Geyser for Spigot!")
 def get_spigot_floodgate(directory):
   info("Downloading Floodgate for Spigot...")
@@ -147,6 +189,24 @@ parser.add_argument("-rmn", "--ram-min", "--ram-minimum", type=str, help="The mi
 parser.add_argument("-rmx", "--ram-max", "--ram-maximum", type=str, help="The maximum amount of RAM the server should use (use Java format; 512M, 2G, etc.)", default="4G")
 parser.add_argument("-g", "--geyser", action="store_const", help="Install Geyser where compatible", const=True, default=False)
 parser.add_argument("-f", "--floodgate", action="store_const", help="Install Floodgate and Geyser where compatible", const=True, default=False)
+parser.add_argument("--build", "--paper-build", type=int, help="If you're using Paper, you can use this option to select a specifc build number")
+parser.add_argument("-p", "--port", type=int, help="The port the server will run on", default=25565)
+parser.add_argument("-m", "--motd", type=str, help="The server MOTD", default="A Minecraft Server")
+parser.add_argument("--disable-online-mode", "--disable-online", action="store_const", help="Online mode (the most secure way of authenticating players) will be disabled if this flag is used", const=True, default=False)
+parser.add_argument("-n", "--players", "--max-players", type=int, help="The maximum number of players who can join the server at once", default=20)
+parser.add_argument("-x", "--spawn-protection", type=int, help="The number of blocks from spawn that players cannot modify the world", default=16)
+parser.add_argument("-e", "--seed", type=str, help="The world seed", default="")
+parser.add_argument("-a", "--gamemode", type=str, help="The default gamemode", default="survival")
+parser.add_argument("-i", "--difficulty", type=str, help="The server difficulty", default="easy")
+parser.add_argument("--hardcore", "--enable-hardcore", action="store_const", help="Hardcore mode will be enabled if this flag is used", const=True, default=False)
+parser.add_argument("--disable-pvp", action="store_const", help="PVP will be disabled if this flag is used", const=True, default=False)
+parser.add_argument("-b", "--bedrock-port", type=int, help="The port the server will run on for Bedrock players when Geyser is installed", default=19132)
+parser.add_argument("-l1", "--bedrock-motd-1", type=str, help="The first MOTD line on Bedrock", default="A Minecraft Server")
+parser.add_argument("-l2", "--bedrock-motd-2", type=str, help="The second MOTD line on Bedrock", default="Bottom text")
+parser.add_argument("-N", "--bedrock-name", "--bedrock-server-name", type=str, help="The server name on Bedrock", default="My Geyser Server")
+parser.add_argument("--agree-eula", action="store_const", help="Automatically agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)", const=True, default=False)
+parser.add_argument("-y", "--force-create", action="store_const", help="Use a directory even if it already has files in it", const=True, default=False)
+
 args = parser.parse_args()
 
 if not args.ram_min:
@@ -162,7 +222,43 @@ if mx < 536870912: # 512MB
 if mx > 34359738368: # 32GB
   warn("Minecraft will not benefit from more than 32GB RAM.")
 
-print("Downloading versions...")
+if 1 <= args.port <= 65535:
+  PROPERTIES["server-port"] = str(args.port)
+  PROPERTIES["query.port"] = str(args.port)
+else:
+  fatal("The port number must be between 1 and 65535.")
+PROPERTIES["motd"] = args.motd
+if args.players > 0:
+  PROPERTIES["max-players"] = str(args.players)
+  GEYSER_CONFIG["max-players"] = str(args.players)
+else:
+  fatal("The maximum number of players must be more than 0.")
+PROPERTIES["spawn-protection"] = str(args.spawn_protection)
+PROPERTIES["seed"] = args.seed
+modes = ("creative", "survival", "adventure", "spectator")
+if args.gamemode in modes:
+  PROPERTIES["gamemode"] = args.gamemode
+else:
+  fatal("The gamemode must be one of " + ", ".join(["'" + mode + "'" for mode in modes[:-1]]) + ", or '" + modes[-1] + "'")
+modes = ("easy", "normal", "hard", "peaceful")
+if args.difficulty in modes:
+  PROPERTIES["difficulty"] = args.difficulty
+else:
+  fatal("The difficulty must be one of " + ", ".join(["'" + mode + "'" for mode in modes[:-1]]) + ", or '" + modes[-1] + "'")
+if args.hardcore and args.difficulty != "hard":
+  info("Hardcore mode overrides the difficulty of the server to be hard.")
+PROPERTIES["hardcore"] = "true" if args.hardcore else "false"
+PROPERTIES["pvp"] = "false" if args.disable_pvp else "true"
+
+if 1 <= args.port <= 65535:
+  GEYSER_CONFIG["bedrock.port"] = str(args.bedrock_port)
+else:
+  fatal("The Bedrock port number must be between 1 and 65535.")
+GEYSER_CONFIG["bedrock.motd1"] = args.bedrock_motd_1
+GEYSER_CONFIG["bedrock.motd2"] = args.bedrock_motd_2
+GEYSER_CONFIG["bedrock.server-name"] = args.bedrock_name
+
+info("Downloading versions...")
 r = get_url("https://launchermeta.mojang.com/mc/game/version_manifest.json", "version manifest")
 manifest = r.json()
 LATEST = manifest["latest"]["release"]
@@ -173,21 +269,32 @@ for version in manifest["versions"]:
 software = get_software(args.software if args.software else "")
 version = get_version(args.version if args.version else "")
 directory = args.directory if args.directory else "."
-build = None
+build = args.build
 
 if args.floodgate:
   args.geyser = True
 if args.geyser and version != LATEST:
   warn("Geyser can only run on the latest Minecraft versions, so it will not be installed. Set the version to 'latest' to ensure you have the latest version.")
   args.geyser = False
+  args.floodgate = False
 if args.geyser and software not in ("paper", "spigot", "fabric"):
   warn("Geyser is only supported on Paper, Spigot, and Fabric servers, so it will not be installed here.")
   args.geyser = False
+  args.floodgate = False
+if args.disable_online_mode:
+  if args.floodgate:
+    PROPERTIES["online-mode"] = "true"
+    warn("Online mode cannot be disabled while Floodgate is enabled because Floodgate overrides online mode.")
+  else:
+    PROPERTIES["online-mode"] = "false"
+else:
+  PROPERTIES["online-mode"] = "true"
 
 if os.path.exists(directory):
   if os.listdir(directory):
-    if not yn_prompt("This directory is not empty, install anyway?"):
-      sys.exit(0)
+    if not args.force_create:
+      if not yn_prompt("This directory is not empty, install anyway?"):
+        sys.exit(0)
 else:
   try:
     makedirs(directory)
@@ -195,7 +302,7 @@ else:
     fatal("You do not have permission to make a server here!")
 
 server_file = None
-print(f"Searching for {software.title()} {version}...")
+info(f"Searching for {software.title()} {version}...")
 if software == "paper":
   builds_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/"
   r = get_url(builds_url, f"Paper builds for {version}")
@@ -293,7 +400,7 @@ elif software == "vanilla" or software == "fabric":
       pattern = "\\/FabricMC\\/fabric\\/releases\\/download\\/[0-9.]+%2B" + escaped_version + "/fabric-api-[0-9.]+\\+" + escaped_version + "\\.jar"
       
       makedirs(os.path.join(directory, "mods"))
-      match = re.search(pattern, r.content.decode("utf8")).group()
+      match = re.search(pattern, r.content.decode()).group()
       r = get_url("https://github.com" + match)
       if not r:
         fatal("Could not download Fabric API.")
@@ -311,6 +418,7 @@ elif software == "vanilla" or software == "fabric":
         fatal(f"Error {r.status_code}: {r.reason} when getting Geyser for Fabric jarfile.")  
       save_file(os.path.join(directory, "mods", "Geyser-Fabric.jar"), r.content)
       info("Installed Geyser!")
+      warn("Geyser-specific commandline options are not currently available with Fabric.")
       
       if args.floodgate:
         info("Installing Floodgate now...")
@@ -328,6 +436,32 @@ elif software == "vanilla" or software == "fabric":
                                                  f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
 
 os.chmod(os.path.join(directory, "start.sh"), 0o774)
-if yn_prompt("Do you agree to the Minecraft EULA? (https://aka.ms/MinecraftEULA)"):
-  save_file(os.path.join(directory, "eula.txt"), "eula=true")
+info("Finished startup script!")
+info("Setting server properties...")
+r = get_url("https://server.properties/")
+lines = r.content.decode().split("\n")[:-4]
+lines[1] = "#" + get_mojang_timestamp()
+new_lines = []
+for line in lines:
+  if "#" in line:
+    active_line, comment = line.split("#", 1)
+  else:
+    active_line = line
+    comment = None
+  if active_line.strip():
+    key, value = active_line.split("=", 1)
+    if key in PROPERTIES:
+      new_lines.append(key + "=" + PROPERTIES.get(key, value) + (" #" + comment if comment else ""))
+    else:
+      new_lines.append(line)
+  else:
+    new_lines.append(line)
+save_file(os.path.join(directory, "server.properties"), "\n".join(new_lines) + "\n\n# Server generated by https://github.com/Aurillium/MCServerGenerator\n")
+eula_file = "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\n#" + get_mojang_timestamp() + "\n"
+if args.agree_eula:
+  save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
+elif yn_prompt("Do you agree to the Minecraft EULA? (https://aka.ms/MinecraftEULA)"):
+  save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
+else:
+  save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=false\n")
 print("Installation successful!")
