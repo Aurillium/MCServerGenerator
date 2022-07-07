@@ -1,4 +1,5 @@
 #!/usr/bin/python3
+import colorama
 import datetime
 import argparse
 import platform
@@ -22,18 +23,19 @@ DIRS_CREATED = []
 PROPERTIES = {}
 GEYSER_CONFIG = {}
 JAVA_PATH = ""
+SUCCESS = False
 
 def info(message):
-    print("Info: " + message)
+    print(f"[{colorama.Fore.LIGHTWHITE_EX}Info{colorama.Style.RESET_ALL}] " + message)
 
 def warn(message):
-    print("Warning: " + message)
+    print(f"[{colorama.Fore.LIGHTYELLOW_EX}Warning{colorama.Style.RESET_ALL}] " + message)
     
 def fatal(message, exit=True):
-    print("Fatal: " + message)
+    print(f"[{colorama.Fore.LIGHTRED_EX}Fatal{colorama.Style.RESET_ALL}] " + message)
     rollback()
-    print("Exitting now...")
     if exit:
+        info("Exitting now...")
         sys.exit(1)
 
 class ErrorLevel(enum.Enum):
@@ -43,23 +45,23 @@ class ErrorLevel(enum.Enum):
     FATAL = fatal
 
 def rollback():
-    print("Rolling back changes...")
+    info("Rolling back changes...")
     if JAVA_PATH:
         try:
             shutil.rmtree(JAVA_PATH)
         except:
-            print(f"Error: Could not delete Java.")
+            print(f"[{colorama.Fore.LIGHTRED_EX}Error{colorama.Style.RESET_ALL}] Could not delete Java.")
     for file in WRITTEN_FILES:
         try:
             os.remove(file)
         except:
-            print(f"Error: Could not delete file '{file}'.")
+            print(f"[{colorama.Fore.LIGHTRED_EX}Error{colorama.Style.RESET_ALL}] Could not delete file '{file}'.")
     for directory in reversed(DIRS_CREATED):
         try:
             os.rmdir(directory)
         except:
-            print(f"Error: Could not delete directory '{directory}'.")
-    print("Done!")
+            print(f"[{colorama.Fore.LIGHTRED_EX}Error{colorama.Style.RESET_ALL}] Could not delete directory '{directory}'.")
+    info("Done!")
 
 def get_mojang_timestamp():
     return datetime.datetime.now().strftime("%a %b %d %H:%M:%S " + time.tzname[time.daylight] + " %Y")
@@ -227,10 +229,17 @@ def get_adoptium(directory, version):
         fatal("Your architecture is not supported.")
     pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk-{version}\\.[0-9]+\\.[0-9]+%2B[0-9]+\\/OpenJDK{version}U-jre_{architecture}_{operating_system}_hotspot_{version}\\.[0-9]+\\.[0-9]+_[0-9]+\\.tar\\.gz"
     old_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk{version}u[0-9]+-b[0-9]+\\/OpenJDK{version}U-jre_{architecture}_{operating_system}_hotspot_{version}u[0-9]+b[0-9]+\\.tar\\.gz"
+    jdk_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk-{version}\\.[0-9]+\\.[0-9]+%2B[0-9]+\\/OpenJDK{version}U-jdk_{architecture}_{operating_system}_hotspot_{version}\\.[0-9]+\\.[0-9]+_[0-9]+\\.tar\\.gz"
+    old_jdk_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk{version}u[0-9]+-b[0-9]+\\/OpenJDK{version}U-jdk_{architecture}_{operating_system}_hotspot_{version}u[0-9]+b[0-9]+\\.tar\\.gz"
     r = get_url(f"https://github.com/adoptium/temurin{version}-binaries/releases/")
-    search_result = re.search(pattern, r.content.decode())
+    website = r.content.decode()
+    search_result = re.search(pattern, website)
     if not search_result:
-        search_result = re.search(old_pattern, r.content.decode())
+        search_result = re.search(old_pattern, website)
+    if not search_result:
+        search_result = re.search(jdk_pattern, website)
+    if not search_result:
+        search_result = re.search(old_jdk_pattern, website)
     url = "https://github.com" + search_result.group()
     r = get_url(url)
     h = get_url(url + ".sha256.txt").content.decode().split()[0]
@@ -531,9 +540,15 @@ try:
         save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
     else:
         save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=false\n")
+    SUCCESS = True
 except KeyboardInterrupt:
     fatal("Install cancelled by user.")
 except Exception as e:
     fatal("An expected exception occurred.", exit=False)
+    info("Exitting now...")
     raise e
-print("Installation successful!")
+finally:
+    if SUCCESS:
+        print("Installation successful!")
+    else:
+        print("Installation failed. Read the log to find out what went wrong.")
