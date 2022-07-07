@@ -1,8 +1,10 @@
 #!/usr/bin/python3
 import datetime
 import argparse
+import platform
 import requests
 import hashlib
+import tarfile
 import zipfile
 import shutil
 import shlex
@@ -10,6 +12,7 @@ import enum
 import time
 import sys
 import os
+import io
 import re
 
 LATEST = None
@@ -18,12 +21,33 @@ WRITTEN_FILES = []
 DIRS_CREATED = []
 PROPERTIES = {}
 GEYSER_CONFIG = {}
+JAVA_PATH = ""
+
+def info(message):
+  print("Info: " + message)
 
 def warn(message):
   print("Warning: " + message)
   
 def fatal(message):
-  print("Fatal: " + message + "\nRolling back changes...")
+  print("Fatal: " + message)
+  rollback()
+  print("Exitting now...")
+  sys.exit(1)
+
+class ErrorLevel(enum.Enum):
+  INFO = info
+  WARN = warn
+  WARNING = warn
+  FATAL = fatal
+
+def rollback():
+  print("Rolling back changes...")
+  if JAVA_PATH:
+    try:
+      shutil.rmtree(JAVA_PATH)
+    except:
+      print(f"Error: Could not delete Java.")
   for file in WRITTEN_FILES:
     try:
       os.remove(file)
@@ -34,17 +58,7 @@ def fatal(message):
       os.rmdir(directory)
     except:
       print(f"Error: Could not delete directory '{directory}'.")
-  print("Done! Exitting now...")
-  sys.exit(1)
-
-def info(message):
-  print("Info: " + message)
-
-class ErrorLevel(enum.Enum):
-  INFO = info
-  WARN = warn
-  WARNING = warn
-  FATAL = fatal
+  print("Done!")
 
 def get_mojang_timestamp():
   return datetime.datetime.now().strftime("%a %b %d %H:%M:%S " + time.tzname[time.daylight] + " %Y")
@@ -134,6 +148,17 @@ def makedirs(path, error_level=ErrorLevel.FATAL):
       except PermissionError:
         error_level(f"You do not have permission to create a directory at '{new_path}'.")
 
+def get_part_startup_linux(directory, rmn, rmx):
+  startup = (
+    f'#!/bin/bash\n'
+    f'cd {shlex.quote(os.path.abspath(directory))}\n'
+    f'export RAM_MIN="{rmn}"\n'
+    f'export RAM_MAX="{rmx}"\n'
+  )
+  if JAVA_PATH:
+    startup += f"export PATH={shlex.quote(os.path.abspath(os.path.join(JAVA_PATH, 'bin')))}:$PATH\nexport JAVA_HOME={shlex.quote(os.path.abspath(JAVA_PATH))}\n"
+  return startup
+
 def get_spigot_geyser(directory):
   info("Downloading Geyser for Spigot...")
   makedirs(os.path.join(directory, "plugins"))
@@ -141,9 +166,10 @@ def get_spigot_geyser(directory):
   geyser_jar = os.path.join(directory, "plugins", "Geyser-Spigot.jar")
   save_file(geyser_jar, r.content)
   info("Setting up configuration...")
+  config_file = os.path.join(directory, "plugins", "Geyser-Spigot", "config.yml")
   with zipfile.ZipFile(geyser_jar) as f:
     f.extract("config.yml", os.path.join(directory, "plugins", "Geyser-Spigot"))
-  config_file = os.path.join(directory, "plugins", "Geyser-Spigot", "config.yml")
+    WRITTEN_FILES.append(config_file)
   lines = []
   with open(config_file) as f:
     level = ""
@@ -181,6 +207,41 @@ def get_spigot_floodgate(directory):
   save_file(os.path.join(directory, "plugins", "Floodgate-Spigot.jar"), r.content)
   info("Installed Floodgate for Spigot!")
 
+def get_adoptium(directory, version):
+  info(f"Downloading Adoptium JRE (JDK{version})...")
+  operating_system = {"Linux": "linux", "Darwin": "mac", "Windows": "windows"}.get(platform.system())
+  if not operating_system:
+    fatal("Your operating system is not supported.")
+  architecture = None
+  arch = platform.machine()
+  if arch in ("x86_64", "AMD64"):
+    architecture = "x64"
+  elif arch in ("i386", "i686"):
+    architecture = "x86-32"
+  elif arch in ("arm",):
+    architecture = "arm"
+  elif arch in ("aarch64_be", "aarch64", "armv8b", "armv8l"):
+    architecture = "aarch64"
+  if not operating_system:
+    fatal("Your architecture is not supported.")
+  pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk-{version}\\.[0-9]+\\.[0-9]+%2B[0-9]+\\/OpenJDK{version}U-jre_{architecture}_{operating_system}_hotspot_{version}\\.[0-9]+\\.[0-9]+_[0-9]+\\.tar\\.gz"
+  old_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk{version}u[0-9]+-b[0-9]+\\/OpenJDK{version}U-jre_{architecture}_{operating_system}_hotspot_{version}u[0-9]+b[0-9]+\\.tar\\.gz"
+  r = get_url(f"https://github.com/adoptium/temurin{version}-binaries/releases/")
+  search_result = re.search(pattern, r.content.decode())
+  if not search_result:
+    search_result = re.search(old_pattern, r.content.decode())
+  url = "https://github.com" + search_result.group()
+  r = get_url(url)
+  h = get_url(url + ".sha256.txt").content.decode().split()[0]
+  if hashlib.sha256(r.content).digest().hex() != h:
+    fatal("Downloaded Java environment hashes do not match.")
+  with tarfile.open(fileobj=io.BytesIO(r.content)) as tar:
+    root = [i for i in tar.getnames() if "/" not in i][0]
+    tar.extractall(directory)
+    adoptium = os.path.join(directory, root)
+  info("Installed Adoptium!")
+  return adoptium
+
 parser = argparse.ArgumentParser(description="Set up a Minecraft server automatically")
 parser.add_argument("-d", "--directory", "--dir", type=str, help="The directory for the server", default=".")
 parser.add_argument("-v", "--version", type=str, help="The server Minecraft version (any version or 'latest')")
@@ -205,6 +266,7 @@ parser.add_argument("-l1", "--bedrock-motd-1", type=str, help="The first MOTD li
 parser.add_argument("-l2", "--bedrock-motd-2", type=str, help="The second MOTD line on Bedrock", default="Bottom text")
 parser.add_argument("-N", "--bedrock-name", "--bedrock-server-name", type=str, help="The server name on Bedrock", default="My Geyser Server")
 parser.add_argument("--agree-eula", action="store_const", help="Automatically agree to the Minecraft EULA (https://aka.ms/MinecraftEULA)", const=True, default=False)
+parser.add_argument("-j", "--java", "--jre", action="store_const", help="Install the Adoptium JRE in the server directory", const=True, default=False)
 parser.add_argument("-y", "--force-create", action="store_const", help="Use a directory even if it already has files in it", const=True, default=False)
 
 args = parser.parse_args()
@@ -301,6 +363,15 @@ else:
   except PermissionError:
     fatal("You do not have permission to make a server here!")
 
+if args.java:
+  middle_num = int(version.split(".")[:2][1])
+  if middle_num < 17:
+    JAVA_PATH = get_adoptium(directory, 8)
+  elif middle_num == 17:
+    JAVA_PATH = get_adoptium(directory, 16)
+  else:
+    JAVA_PATH = get_adoptium(directory, 17)
+
 server_file = None
 info(f"Searching for {software.title()} {version}...")
 if software == "paper":
@@ -333,11 +404,7 @@ if software == "paper":
   if args.geyser: get_spigot_geyser(directory)
   if args.floodgate: get_spigot_floodgate(directory)
   info("Writing startup script...")
-  save_file(os.path.join(directory, "start.sh"), '#!/bin/bash\n'
-                                                f'cd {shlex.quote(os.path.abspath(directory))}\n'
-                                                f'export RAM_MIN="{args.ram_min}"\n'
-                                                f'export RAM_MAX="{args.ram_max}"\n'
-                                                f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -jar {download_info["name"]} --nogui\n')
+  save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -jar {download_info["name"]} --nogui\n')
 
 elif software == "spigot":
   try:
@@ -345,8 +412,15 @@ elif software == "spigot":
   except requests.exceptions.ConnectionError:
     fatal("There appears to be no internet connection.")
   if r.status_code == 404:
-    fatal("This version of Spigot has not been released yet.")
-  if r.status_code != 200:
+    try:
+      r = requests.get(f"https://cdn.getbukkit.org/spigot/spigot-{version}.jar")
+    except requests.exceptions.ConnectionError:
+      fatal("There appears to be no internet connection.")
+    if r.status_code == 404:
+      fatal("This version of Spigot has not been released yet.")
+    elif r.status_code != 200:
+      fatal(f"Error {r.status_code}: {r.reason} when getting Spigot jarfile.")
+  elif r.status_code != 200:
     fatal(f"Error {r.status_code}: {r.reason} when getting Spigot jarfile.")
   jarfile = f"spigot-{version}.jar"
   save_file(os.path.join(directory, jarfile), r.content)
@@ -354,11 +428,7 @@ elif software == "spigot":
   if args.geyser: get_spigot_geyser(directory)
   if args.floodgate: get_spigot_floodgate(directory)
   info("Writing startup script...")
-  save_file(os.path.join(directory, "start.sh"), f'#!/bin/bash\n'
-                                                 f'cd {shlex.quote(os.path.abspath(directory))}\n'
-                                                 f'export RAM_MIN="{args.ram_min}"\n'
-                                                 f'export RAM_MAX="{args.ram_max}"\n'
-                                                 f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -jar {jarfile} -nogui\n')
+  save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -jar {jarfile} -nogui\n')
 
 elif software == "vanilla" or software == "fabric":
   for mc_version in manifest["versions"]:
@@ -429,11 +499,7 @@ elif software == "vanilla" or software == "fabric":
         info("Installed Floodgate!")
 
   info("Writing startup script...")
-  save_file(os.path.join(directory, "start.sh"), f'#!/bin/bash\n'
-                                                 f'cd {shlex.quote(os.path.abspath(directory))}\n'
-                                                 f'export RAM_MIN="{args.ram_min}"\n'
-                                                 f'export RAM_MAX="{args.ram_max}"\n'
-                                                 f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
+  save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
 
 os.chmod(os.path.join(directory, "start.sh"), 0o774)
 info("Finished startup script!")
