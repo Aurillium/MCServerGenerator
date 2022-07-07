@@ -29,11 +29,12 @@ def info(message):
 def warn(message):
     print("Warning: " + message)
     
-def fatal(message):
+def fatal(message, exit=True):
     print("Fatal: " + message)
     rollback()
     print("Exitting now...")
-    sys.exit(1)
+    if exit:
+        sys.exit(1)
 
 class ErrorLevel(enum.Enum):
     INFO = info
@@ -269,265 +270,270 @@ parser.add_argument("--agree-eula", action="store_const", help="Automatically ag
 parser.add_argument("-j", "--java", "--jre", action="store_const", help="Install the Adoptium JRE in the server directory", const=True, default=False)
 parser.add_argument("-y", "--force-create", action="store_const", help="Use a directory even if it already has files in it", const=True, default=False)
 
-args = parser.parse_args()
+try:
+    args = parser.parse_args()
 
-if not args.ram_min:
-    args.ram_min = args.ram_max
-mn = ram_size(args.ram_min)
-mx = ram_size(args.ram_max)
-if mx < mn:
-    fatal("Maximum RAM size is less than the minimum.")
-if mx > mn:
-    warn("If the minimum and maximum RAM do not match, there will be unused memory, which is wasted.")
-if mx < 536870912: # 512MB
-    warn("Minecraft will not run well with less than 512MB RAM.")
-if mx > 34359738368: # 32GB
-    warn("Minecraft will not benefit from more than 32GB RAM.")
+    if not args.ram_min:
+        args.ram_min = args.ram_max
+    mn = ram_size(args.ram_min)
+    mx = ram_size(args.ram_max)
+    if mx < mn:
+        fatal("Maximum RAM size is less than the minimum.")
+    if mx > mn:
+        warn("If the minimum and maximum RAM do not match, there will be unused memory, which is wasted.")
+    if mx < 536870912: # 512MB
+        warn("Minecraft will not run well with less than 512MB RAM.")
+    if mx > 34359738368: # 32GB
+        warn("Minecraft will not benefit from more than 32GB RAM.")
 
-if 1 <= args.port <= 65535:
-    PROPERTIES["server-port"] = str(args.port)
-    PROPERTIES["query.port"] = str(args.port)
-else:
-    fatal("The port number must be between 1 and 65535.")
-PROPERTIES["motd"] = args.motd
-if args.players > 0:
-    PROPERTIES["max-players"] = str(args.players)
-    GEYSER_CONFIG["max-players"] = str(args.players)
-else:
-    fatal("The maximum number of players must be more than 0.")
-PROPERTIES["spawn-protection"] = str(args.spawn_protection)
-PROPERTIES["seed"] = args.seed
-modes = ("creative", "survival", "adventure", "spectator")
-if args.gamemode in modes:
-    PROPERTIES["gamemode"] = args.gamemode
-else:
-    fatal("The gamemode must be one of " + ", ".join(["'" + mode + "'" for mode in modes[:-1]]) + ", or '" + modes[-1] + "'")
-modes = ("easy", "normal", "hard", "peaceful")
-if args.difficulty in modes:
-    PROPERTIES["difficulty"] = args.difficulty
-else:
-    fatal("The difficulty must be one of " + ", ".join(["'" + mode + "'" for mode in modes[:-1]]) + ", or '" + modes[-1] + "'")
-if args.hardcore and args.difficulty != "hard":
-    info("Hardcore mode overrides the difficulty of the server to be hard.")
-PROPERTIES["hardcore"] = "true" if args.hardcore else "false"
-PROPERTIES["pvp"] = "false" if args.disable_pvp else "true"
+    if 1 <= args.port <= 65535:
+        PROPERTIES["server-port"] = str(args.port)
+        PROPERTIES["query.port"] = str(args.port)
+    else:
+        fatal("The port number must be between 1 and 65535.")
+    PROPERTIES["motd"] = args.motd
+    if args.players > 0:
+        PROPERTIES["max-players"] = str(args.players)
+        GEYSER_CONFIG["max-players"] = str(args.players)
+    else:
+        fatal("The maximum number of players must be more than 0.")
+    PROPERTIES["spawn-protection"] = str(args.spawn_protection)
+    PROPERTIES["seed"] = args.seed
+    modes = ("creative", "survival", "adventure", "spectator")
+    if args.gamemode in modes:
+        PROPERTIES["gamemode"] = args.gamemode
+    else:
+        fatal("The gamemode must be one of " + ", ".join(["'" + mode + "'" for mode in modes[:-1]]) + ", or '" + modes[-1] + "'")
+    modes = ("easy", "normal", "hard", "peaceful")
+    if args.difficulty in modes:
+        PROPERTIES["difficulty"] = args.difficulty
+    else:
+        fatal("The difficulty must be one of " + ", ".join(["'" + mode + "'" for mode in modes[:-1]]) + ", or '" + modes[-1] + "'")
+    if args.hardcore and args.difficulty != "hard":
+        info("Hardcore mode overrides the difficulty of the server to be hard.")
+    PROPERTIES["hardcore"] = "true" if args.hardcore else "false"
+    PROPERTIES["pvp"] = "false" if args.disable_pvp else "true"
 
-if 1 <= args.port <= 65535:
-    GEYSER_CONFIG["bedrock.port"] = str(args.bedrock_port)
-else:
-    fatal("The Bedrock port number must be between 1 and 65535.")
-GEYSER_CONFIG["bedrock.motd1"] = args.bedrock_motd_1
-GEYSER_CONFIG["bedrock.motd2"] = args.bedrock_motd_2
-GEYSER_CONFIG["bedrock.server-name"] = args.bedrock_name
+    if 1 <= args.port <= 65535:
+        GEYSER_CONFIG["bedrock.port"] = str(args.bedrock_port)
+    else:
+        fatal("The Bedrock port number must be between 1 and 65535.")
+    GEYSER_CONFIG["bedrock.motd1"] = args.bedrock_motd_1
+    GEYSER_CONFIG["bedrock.motd2"] = args.bedrock_motd_2
+    GEYSER_CONFIG["bedrock.server-name"] = args.bedrock_name
+    info("Downloading versions...")
+    r = get_url("https://launchermeta.mojang.com/mc/game/version_manifest.json", "version manifest")
+    manifest = r.json()
+    LATEST = manifest["latest"]["release"]
+    for version in manifest["versions"]:
+        if version["type"] == "release":
+            VERSIONS.append(version["id"])
 
-info("Downloading versions...")
-r = get_url("https://launchermeta.mojang.com/mc/game/version_manifest.json", "version manifest")
-manifest = r.json()
-LATEST = manifest["latest"]["release"]
-for version in manifest["versions"]:
-    if version["type"] == "release":
-        VERSIONS.append(version["id"])
+    software = get_software(args.software if args.software else "")
+    version = get_version(args.version if args.version else "")
+    directory = args.directory if args.directory else "."
+    build = args.build
 
-software = get_software(args.software if args.software else "")
-version = get_version(args.version if args.version else "")
-directory = args.directory if args.directory else "."
-build = args.build
-
-if args.floodgate:
-    args.geyser = True
-if args.geyser and version != LATEST:
-    warn("Geyser can only run on the latest Minecraft versions, so it will not be installed. Set the version to 'latest' to ensure you have the latest version.")
-    args.geyser = False
-    args.floodgate = False
-if args.geyser and software not in ("paper", "spigot", "fabric"):
-    warn("Geyser is only supported on Paper, Spigot, and Fabric servers, so it will not be installed here.")
-    args.geyser = False
-    args.floodgate = False
-if args.disable_online_mode:
     if args.floodgate:
+        args.geyser = True
+    if args.geyser and version != LATEST:
+        warn("Geyser can only run on the latest Minecraft versions, so it will not be installed. Set the version to 'latest' to ensure you have the latest version.")
+        args.geyser = False
+        args.floodgate = False
+    if args.geyser and software not in ("paper", "spigot", "fabric"):
+        warn("Geyser is only supported on Paper, Spigot, and Fabric servers, so it will not be installed here.")
+        args.geyser = False
+        args.floodgate = False
+    if args.disable_online_mode:
+        if args.floodgate:
+            PROPERTIES["online-mode"] = "true"
+            warn("Online mode cannot be disabled while Floodgate is enabled because Floodgate overrides online mode.")
+        else:
+            PROPERTIES["online-mode"] = "false"
+    else:
         PROPERTIES["online-mode"] = "true"
-        warn("Online mode cannot be disabled while Floodgate is enabled because Floodgate overrides online mode.")
+
+    if os.path.exists(directory):
+        if os.listdir(directory):
+            if not args.force_create:
+                if not yn_prompt("This directory is not empty, install anyway?"):
+                    sys.exit(0)
     else:
-        PROPERTIES["online-mode"] = "false"
-else:
-    PROPERTIES["online-mode"] = "true"
-
-if os.path.exists(directory):
-    if os.listdir(directory):
-        if not args.force_create:
-            if not yn_prompt("This directory is not empty, install anyway?"):
-                sys.exit(0)
-else:
-    try:
-        makedirs(directory)
-    except PermissionError:
-        fatal("You do not have permission to make a server here!")
-
-if args.java:
-    middle_num = int(version.split(".")[:2][1])
-    if middle_num < 17:
-        JAVA_PATH = get_adoptium(directory, 8)
-    elif middle_num == 17:
-        JAVA_PATH = get_adoptium(directory, 16)
-    else:
-        JAVA_PATH = get_adoptium(directory, 17)
-
-server_file = None
-info(f"Searching for {software.title()} {version}...")
-if software == "paper":
-    builds_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/"
-    r = get_url(builds_url, f"Paper builds for {version}")
-    j = r.json()
-    if "error" in j:
-        if j["error"] == "Version not found.":
-            fatal("This version of Paper has not been released yet.")
-        else:
-            fatal("Unexpected error: " + j["error"])
-    builds = j["builds"]
-    if len(builds) == 0:
-        fatal("This version of Paper has not been released yet.")
-    if build:
-        for b in builds:
-            selected = b
-            if b["build"] == build:
-                break
-        else:
-            fatal("The selected build could not be found.")
-    else:
-        selected = builds[-1]
-    download_info = selected["downloads"]["application"]
-    r = get_url(builds_url + str(selected["build"]) + "/downloads/" + download_info["name"], "Paper jar")
-    if hashlib.sha256(r.content).digest().hex() != download_info["sha256"]:
-        fatal("Hashes do not match for downloaded jarfile.")
-    save_file(os.path.join(directory, download_info["name"]), r.content)
-    info("Saved jarfile!")
-    if args.geyser: get_spigot_geyser(directory)
-    if args.floodgate: get_spigot_floodgate(directory)
-    info("Writing startup script...")
-    save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -jar {download_info["name"]} --nogui\n')
-
-elif software == "spigot":
-    try:
-        r = requests.get(f"https://download.getbukkit.org/spigot/spigot-{version}.jar")
-    except requests.exceptions.ConnectionError:
-        fatal("There appears to be no internet connection.")
-    if r.status_code == 404:
         try:
-            r = requests.get(f"https://cdn.getbukkit.org/spigot/spigot-{version}.jar")
+            makedirs(directory)
+        except PermissionError:
+            fatal("You do not have permission to make a server here!")
+
+    if args.java:
+        middle_num = int(version.split(".")[:2][1])
+        if middle_num < 17:
+            JAVA_PATH = get_adoptium(directory, 8)
+        elif middle_num == 17:
+            JAVA_PATH = get_adoptium(directory, 16)
+        else:
+            JAVA_PATH = get_adoptium(directory, 17)
+
+    server_file = None
+    info(f"Searching for {software.title()} {version}...")
+    if software == "paper":
+        builds_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/"
+        r = get_url(builds_url, f"Paper builds for {version}")
+        j = r.json()
+        if "error" in j:
+            if j["error"] == "Version not found.":
+                fatal("This version of Paper has not been released yet.")
+            else:
+                fatal("Unexpected error: " + j["error"])
+        builds = j["builds"]
+        if len(builds) == 0:
+            fatal("This version of Paper has not been released yet.")
+        if build:
+            for b in builds:
+                selected = b
+                if b["build"] == build:
+                    break
+            else:
+                fatal("The selected build could not be found.")
+        else:
+            selected = builds[-1]
+        download_info = selected["downloads"]["application"]
+        r = get_url(builds_url + str(selected["build"]) + "/downloads/" + download_info["name"], "Paper jar")
+        if hashlib.sha256(r.content).digest().hex() != download_info["sha256"]:
+            fatal("Hashes do not match for downloaded jarfile.")
+        save_file(os.path.join(directory, download_info["name"]), r.content)
+        info("Saved jarfile!")
+        if args.geyser: get_spigot_geyser(directory)
+        if args.floodgate: get_spigot_floodgate(directory)
+        info("Writing startup script...")
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -jar {download_info["name"]} --nogui\n')
+
+    elif software == "spigot":
+        try:
+            r = requests.get(f"https://download.getbukkit.org/spigot/spigot-{version}.jar")
         except requests.exceptions.ConnectionError:
             fatal("There appears to be no internet connection.")
         if r.status_code == 404:
-            fatal("This version of Spigot has not been released yet.")
-        elif r.status_code != 200:
-            fatal(f"Error {r.status_code}: {r.reason} when getting Spigot jarfile.")
-    elif r.status_code != 200:
-        fatal(f"Error {r.status_code}: {r.reason} when getting Spigot jarfile.")
-    jarfile = f"spigot-{version}.jar"
-    save_file(os.path.join(directory, jarfile), r.content)
-    info("Saved jarfile!")
-    if args.geyser: get_spigot_geyser(directory)
-    if args.floodgate: get_spigot_floodgate(directory)
-    info("Writing startup script...")
-    save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -jar {jarfile} -nogui\n')
-
-elif software == "vanilla" or software == "fabric":
-    for mc_version in manifest["versions"]:
-        if mc_version["id"] == version:
-            launcher_url = mc_version["url"]
-            break
-    r = get_url(launcher_url)
-    download_info = r.json()["downloads"]["server"]
-    r = get_url(download_info["url"])
-    if len(r.content) != download_info["size"]:
-        fatal("Jarfile size does not match the Mojang-specified size.")
-    elif hashlib.sha1(r.content).digest().hex() != download_info["sha1"]:
-        fatal("Hashes do not match for downloaded jarfile.")
-
-    if software == "vanilla":
-        jarfile = f"vanilla-{version}.jar"
-        save_file(os.path.join(directory, jarfile), r.content)
-        info("Saved jarfile!")
-
-    elif software == "fabric":
-        save_file(os.path.join(directory, "server.jar"), r.content)
-        info("Saved vanilla jarfile! Downloading Fabric...")
-        r = get_url("https://meta.fabricmc.net/v2/versions/installer")
-        installer_version = r.json()[0]["version"]
-        r = get_url("https://meta.fabricmc.net/v2/versions/loader")
-        loader_version = r.json()[0]["version"]
-        r = get_url(f"https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar")
-        jarfile = f"fabric-{version}.jar"
-        save_file(os.path.join(directory, jarfile), r.content)
-
-        info("Saved Fabric jarfile!")
-        
-        if args.geyser:
-            info("Installing Geyser now...")
-            r = get_url("https://github.com/FabricMC/fabric/releases/")
-            if not r:
-                fatal("Could not get Fabric API releases.")
-            escaped_version = version.replace(".", "\\.")
-            pattern = "\\/FabricMC\\/fabric\\/releases\\/download\\/[0-9.]+%2B" + escaped_version + "/fabric-api-[0-9.]+\\+" + escaped_version + "\\.jar"
-            
-            makedirs(os.path.join(directory, "mods"))
-            match = re.search(pattern, r.content.decode()).group()
-            r = get_url("https://github.com" + match)
-            if not r:
-                fatal("Could not download Fabric API.")
-            save_file(os.path.join(directory, "mods", match.split("/")[-1]), r.content)
-            info("Installed Fabric API!")
-            
-            version_split = version.split(".")
             try:
-                r = requests.get("https://ci.opencollab.dev/job/GeyserMC/job/Geyser-Fabric/job/java-" + version_split[0] + "." + version_split[1] + "/lastSuccessfulBuild/artifact/build/libs/Geyser-Fabric.jar")
+                r = requests.get(f"https://cdn.getbukkit.org/spigot/spigot-{version}.jar")
             except requests.exceptions.ConnectionError:
                 fatal("There appears to be no internet connection.")
             if r.status_code == 404:
-                fatal("This version of Geyser for Fabric has not been released yet.")
-            if r.status_code != 200:
-                fatal(f"Error {r.status_code}: {r.reason} when getting Geyser for Fabric jarfile.")  
-            save_file(os.path.join(directory, "mods", "Geyser-Fabric.jar"), r.content)
-            info("Installed Geyser!")
-            warn("Geyser-specific commandline options are not currently available with Fabric.")
+                fatal("This version of Spigot has not been released yet.")
+            elif r.status_code != 200:
+                fatal(f"Error {r.status_code}: {r.reason} when getting Spigot jarfile.")
+        elif r.status_code != 200:
+            fatal(f"Error {r.status_code}: {r.reason} when getting Spigot jarfile.")
+        jarfile = f"spigot-{version}.jar"
+        save_file(os.path.join(directory, jarfile), r.content)
+        info("Saved jarfile!")
+        if args.geyser: get_spigot_geyser(directory)
+        if args.floodgate: get_spigot_floodgate(directory)
+        info("Writing startup script...")
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -jar {jarfile} -nogui\n')
+
+    elif software == "vanilla" or software == "fabric":
+        for mc_version in manifest["versions"]:
+            if mc_version["id"] == version:
+                launcher_url = mc_version["url"]
+                break
+        r = get_url(launcher_url)
+        download_info = r.json()["downloads"]["server"]
+        r = get_url(download_info["url"])
+        if len(r.content) != download_info["size"]:
+            fatal("Jarfile size does not match the Mojang-specified size.")
+        elif hashlib.sha1(r.content).digest().hex() != download_info["sha1"]:
+            fatal("Hashes do not match for downloaded jarfile.")
+
+        if software == "vanilla":
+            jarfile = f"vanilla-{version}.jar"
+            save_file(os.path.join(directory, jarfile), r.content)
+            info("Saved jarfile!")
+
+        elif software == "fabric":
+            save_file(os.path.join(directory, "server.jar"), r.content)
+            info("Saved vanilla jarfile! Downloading Fabric...")
+            r = get_url("https://meta.fabricmc.net/v2/versions/installer")
+            installer_version = r.json()[0]["version"]
+            r = get_url("https://meta.fabricmc.net/v2/versions/loader")
+            loader_version = r.json()[0]["version"]
+            r = get_url(f"https://meta.fabricmc.net/v2/versions/loader/{version}/{loader_version}/{installer_version}/server/jar")
+            jarfile = f"fabric-{version}.jar"
+            save_file(os.path.join(directory, jarfile), r.content)
+
+            info("Saved Fabric jarfile!")
             
-            if args.floodgate:
-                info("Installing Floodgate now...")
-                r = get_url("https://ci.opencollab.dev/job/GeyserMC/job/Floodgate-Fabric/job/master/lastSuccessfulBuild/artifact/build/libs/floodgate-fabric.jar")
+            if args.geyser:
+                info("Installing Geyser now...")
+                r = get_url("https://github.com/FabricMC/fabric/releases/")
                 if not r:
-                    fatal("Could not download Floodgate for Fabric jarfile.")
-                save_file(os.path.join(directory, "mods", "Floodgate-Fabric.jar"), r.content)
-                info("Installed Floodgate!")
+                    fatal("Could not get Fabric API releases.")
+                escaped_version = version.replace(".", "\\.")
+                pattern = "\\/FabricMC\\/fabric\\/releases\\/download\\/[0-9.]+%2B" + escaped_version + "/fabric-api-[0-9.]+\\+" + escaped_version + "\\.jar"
+                
+                makedirs(os.path.join(directory, "mods"))
+                match = re.search(pattern, r.content.decode()).group()
+                r = get_url("https://github.com" + match)
+                if not r:
+                    fatal("Could not download Fabric API.")
+                save_file(os.path.join(directory, "mods", match.split("/")[-1]), r.content)
+                info("Installed Fabric API!")
+                
+                version_split = version.split(".")
+                try:
+                    r = requests.get("https://ci.opencollab.dev/job/GeyserMC/job/Geyser-Fabric/job/java-" + version_split[0] + "." + version_split[1] + "/lastSuccessfulBuild/artifact/build/libs/Geyser-Fabric.jar")
+                except requests.exceptions.ConnectionError:
+                    fatal("There appears to be no internet connection.")
+                if r.status_code == 404:
+                    fatal("This version of Geyser for Fabric has not been released yet.")
+                if r.status_code != 200:
+                    fatal(f"Error {r.status_code}: {r.reason} when getting Geyser for Fabric jarfile.")  
+                save_file(os.path.join(directory, "mods", "Geyser-Fabric.jar"), r.content)
+                info("Installed Geyser!")
+                warn("Geyser-specific commandline options are not currently available with Fabric.")
+                
+                if args.floodgate:
+                    info("Installing Floodgate now...")
+                    r = get_url("https://ci.opencollab.dev/job/GeyserMC/job/Floodgate-Fabric/job/master/lastSuccessfulBuild/artifact/build/libs/floodgate-fabric.jar")
+                    if not r:
+                        fatal("Could not download Floodgate for Fabric jarfile.")
+                    save_file(os.path.join(directory, "mods", "Floodgate-Fabric.jar"), r.content)
+                    info("Installed Floodgate!")
 
-    info("Writing startup script...")
-    save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
+        info("Writing startup script...")
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
 
-os.chmod(os.path.join(directory, "start.sh"), 0o774)
-info("Finished startup script!")
-info("Setting server properties...")
-r = get_url("https://server.properties/")
-lines = r.content.decode().split("\n")[:-4]
-lines[1] = "#" + get_mojang_timestamp()
-new_lines = []
-for line in lines:
-    if "#" in line:
-        active_line, comment = line.split("#", 1)
-    else:
-        active_line = line
-        comment = None
-    if active_line.strip():
-        key, value = active_line.split("=", 1)
-        if key in PROPERTIES:
-            new_lines.append(key + "=" + PROPERTIES.get(key, value) + (" #" + comment if comment else ""))
+    os.chmod(os.path.join(directory, "start.sh"), 0o774)
+    info("Finished startup script!")
+    info("Setting server properties...")
+    r = get_url("https://server.properties/")
+    lines = r.content.decode().split("\n")[:-4]
+    lines[1] = "#" + get_mojang_timestamp()
+    new_lines = []
+    for line in lines:
+        if "#" in line:
+            active_line, comment = line.split("#", 1)
+        else:
+            active_line = line
+            comment = None
+        if active_line.strip():
+            key, value = active_line.split("=", 1)
+            if key in PROPERTIES:
+                new_lines.append(key + "=" + PROPERTIES.get(key, value) + (" #" + comment if comment else ""))
+            else:
+                new_lines.append(line)
         else:
             new_lines.append(line)
+    save_file(os.path.join(directory, "server.properties"), "\n".join(new_lines) + "\n\n# Server generated by https://github.com/Aurillium/MCServerGenerator\n")
+    eula_file = "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\n#" + get_mojang_timestamp() + "\n"
+    if args.agree_eula:
+        save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
+    elif yn_prompt("Do you agree to the Minecraft EULA? (https://aka.ms/MinecraftEULA)"):
+        save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
     else:
-        new_lines.append(line)
-save_file(os.path.join(directory, "server.properties"), "\n".join(new_lines) + "\n\n# Server generated by https://github.com/Aurillium/MCServerGenerator\n")
-eula_file = "#By changing the setting below to TRUE you are indicating your agreement to our EULA (https://aka.ms/MinecraftEULA).\n#" + get_mojang_timestamp() + "\n"
-if args.agree_eula:
-    save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
-elif yn_prompt("Do you agree to the Minecraft EULA? (https://aka.ms/MinecraftEULA)"):
-    save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=true\n")
-else:
-    save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=false\n")
+        save_file(os.path.join(directory, "eula.txt"), eula_file + "eula=false\n")
+except KeyboardInterrupt:
+    fatal("Install cancelled by user.")
+except Exception as e:
+    fatal("An expected exception occurred.", exit=False)
+    raise e
 print("Installation successful!")
