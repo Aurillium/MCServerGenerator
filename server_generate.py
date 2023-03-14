@@ -391,7 +391,7 @@ try:
         j = r.json()
         if build:
             if str(build) not in j["builds"]["all"]:
-                fatal(f"Purpur build {build} doesn't exist for {version}")
+                fatal(f"Purpur build {build} doesn't exist for Minecraft {version}")
         else:
             build = j["builds"]["latest"]
         download_url = f"https://api.purpurmc.org/v2/purpur/{version}/{build}/download"
@@ -422,7 +422,7 @@ try:
                 if b["build"] == build:
                     break
             else:
-                fatal(f"Paper build {build} doesn't exist for {version}.")
+                fatal(f"Paper build {build} doesn't exist for Minecraft {version}.")
         else:
             selected = builds[-1]
         download_info = selected["downloads"]["application"]
