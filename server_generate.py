@@ -402,7 +402,7 @@ try:
         if args.geyser: get_spigot_geyser(directory)
         if args.floodgate: get_spigot_floodgate(directory)
         info("Writing startup script...")
-        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + aikars_flags(file_name))
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(args.ram_min, args.ram_max) + aikars_flags(file_name))
 
     elif software == "paper":
         builds_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/"
@@ -434,7 +434,7 @@ try:
         if args.geyser: get_spigot_geyser(directory)
         if args.floodgate: get_spigot_floodgate(directory)
         info("Writing startup script...")
-        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + aikars_flags(download_info["name"]))
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(args.ram_min, args.ram_max) + aikars_flags(download_info["name"]))
 
     elif software == "spigot":
         try:
@@ -458,7 +458,7 @@ try:
         if args.geyser: get_spigot_geyser(directory)
         if args.floodgate: get_spigot_floodgate(directory)
         info("Writing startup script...")
-        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -jar {jarfile} -nogui\n')
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -jar {jarfile} -nogui\n')
 
     elif software == "vanilla" or software == "fabric":
         for mc_version in manifest["versions"]:
@@ -529,7 +529,7 @@ try:
                     info("Installed Floodgate!")
 
         info("Writing startup script...")
-        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -jar {jarfile} -nogui\n')
 
     os.chmod(os.path.join(directory, "start.sh"), 0o774)
     info("Finished startup script!")
