@@ -8,7 +8,6 @@ import hashlib
 import tarfile
 import zipfile
 import shutil
-import shlex
 import enum
 import time
 import sys
@@ -69,13 +68,14 @@ def get_mojang_timestamp():
 def get_software(software=""):
     software = software.strip().lower()
     while True:
-        if software in ("paper", "spigot", "vanilla", "fabric"):
+        if software in ("purpur", "paper", "spigot", "vanilla", "fabric"):
             return software
         else:
             if software:
                 print("That isn't a valid type of server software.")
-        software = input("Server softare ([P]aper, [S]pigot, [V]anilla, [F]abric): ").strip().lower()
-        if software == "p": software = "paper"
+        software = input("Server softare (P[u]rpur, [P]aper, [S]pigot, [V]anilla, [F]abric): ").strip().lower()
+        if software == "u": software = "purpur"
+        elif software == "p": software = "paper"
         elif software == "s": software = "spigot"
         elif software == "v": software = "vanilla"
         elif software == "f": software = "fabric"
@@ -92,9 +92,12 @@ def get_version(version=""):
                 print("That isn't a valid version.")
         version = input("Server version (any release or 'latest'): ").strip().lower()
 
-def get_url(url, resource=None, error_level=ErrorLevel.FATAL):
+def get_url(url, resource=None, error_level=ErrorLevel.FATAL, user_agent=None):
     try:
-        r = requests.get(url)
+        if user_agent:
+            r = requests.get(url, headers={"User-Agent": user_agent})
+        else:
+            r = requests.get(url)
         if r.status_code == 200:
             return r
         else:
@@ -151,16 +154,20 @@ def makedirs(path, error_level=ErrorLevel.FATAL):
             except PermissionError:
                 error_level(f"You do not have permission to create a directory at '{new_path}'.")
 
-def get_part_startup_linux(directory, rmn, rmx):
+def get_part_startup_linux(rmn, rmx):
     startup = (
         f'#!/bin/bash\n'
-        f'cd {shlex.quote(os.path.abspath(directory))}\n'
+        f'export HERE="$(dirname $(readlink -e $BASH_SOURCE))"\n'
         f'export RAM_MIN="{rmn}"\n'
         f'export RAM_MAX="{rmx}"\n'
+        f'cd $HERE\n'
     )
     if JAVA_PATH:
-        startup += f"export PATH={shlex.quote(os.path.abspath(os.path.join(JAVA_PATH, 'bin')))}:$PATH\nexport JAVA_HOME={shlex.quote(os.path.abspath(JAVA_PATH))}\n"
+        startup += f"export PATH=$HERE/{JAVA_PATH}/bin:$PATH\nexport JAVA_HOME=$HERE/{JAVA_PATH}\n"
     return startup
+
+def aikars_flags(jarfile):
+    return f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -jar {jarfile} --nogui\n'
 
 def get_spigot_geyser(directory):
     info("Downloading Geyser for Spigot...")
@@ -210,7 +217,7 @@ def get_spigot_floodgate(directory):
     save_file(os.path.join(directory, "plugins", "Floodgate-Spigot.jar"), r.content)
     info("Installed Floodgate for Spigot!")
 
-def get_adoptium(directory, version):
+def get_adoptium(directory, version, user_agent="Mozilla/5.0 (X11; Ubuntu; Linux x86_64; rv:109.0) Gecko/20100101 Firefox/110.0"):
     info(f"Downloading Adoptium JRE (JDK{version})...")
     operating_system = {"Linux": "linux", "Darwin": "mac", "Windows": "windows"}.get(platform.system())
     if not operating_system:
@@ -225,30 +232,24 @@ def get_adoptium(directory, version):
         architecture = "arm"
     elif arch in ("aarch64_be", "aarch64", "armv8b", "armv8l"):
         architecture = "aarch64"
-    if not operating_system:
+    if not architecture:
         fatal("Your architecture is not supported.")
-    pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk-{version}\\.[0-9]+\\.[0-9]+%2B[0-9]+\\/OpenJDK{version}U-jre_{architecture}_{operating_system}_hotspot_{version}\\.[0-9]+\\.[0-9]+_[0-9]+\\.tar\\.gz"
-    old_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk{version}u[0-9]+-b[0-9]+\\/OpenJDK{version}U-jre_{architecture}_{operating_system}_hotspot_{version}u[0-9]+b[0-9]+\\.tar\\.gz"
-    jdk_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk-{version}\\.[0-9]+\\.[0-9]+%2B[0-9]+\\/OpenJDK{version}U-jdk_{architecture}_{operating_system}_hotspot_{version}\\.[0-9]+\\.[0-9]+_[0-9]+\\.tar\\.gz"
-    old_jdk_pattern = f"\\/adoptium\\/temurin{version}-binaries\\/releases\\/download\\/jdk{version}u[0-9]+-b[0-9]+\\/OpenJDK{version}U-jdk_{architecture}_{operating_system}_hotspot_{version}u[0-9]+b[0-9]+\\.tar\\.gz"
-    r = get_url(f"https://github.com/adoptium/temurin{version}-binaries/releases/")
-    website = r.content.decode()
-    search_result = re.search(pattern, website)
-    if not search_result:
-        search_result = re.search(old_pattern, website)
-    if not search_result:
-        search_result = re.search(jdk_pattern, website)
-    if not search_result:
-        search_result = re.search(old_jdk_pattern, website)
-    url = "https://github.com" + search_result.group()
-    r = get_url(url)
-    h = get_url(url + ".sha256.txt").content.decode().split()[0]
+    api_link = f"https://api.adoptium.net/v3/assets/latest/{version}/hotspot?architecture={architecture}&image_type=jre&os={operating_system}"
+    r = get_url(api_link, user_agent=user_agent)
+    j = r.json()
+
+    # It will be the only one there
+    release = j[0]
+    download_url = release["binary"]["package"]["link"]
+    h = release["binary"]["package"]["checksum"]
+    r = get_url(download_url)
+
     if hashlib.sha256(r.content).digest().hex() != h:
         fatal("Downloaded Java environment hashes do not match.")
     with tarfile.open(fileobj=io.BytesIO(r.content)) as tar:
         root = [i for i in tar.getnames() if "/" not in i][0]
         tar.extractall(directory)
-        adoptium = os.path.join(directory, root)
+        adoptium = root
     info("Installed Adoptium!")
     return adoptium
 
@@ -260,7 +261,7 @@ parser.add_argument("-rmn", "--ram-min", "--ram-minimum", type=str, help="The mi
 parser.add_argument("-rmx", "--ram-max", "--ram-maximum", type=str, help="The maximum amount of RAM the server should use (use Java format; 512M, 2G, etc.)", default="4G")
 parser.add_argument("-g", "--geyser", action="store_const", help="Install Geyser where compatible", const=True, default=False)
 parser.add_argument("-f", "--floodgate", action="store_const", help="Install Floodgate and Geyser where compatible", const=True, default=False)
-parser.add_argument("--build", "--paper-build", type=int, help="If you're using Paper, you can use this option to select a specifc build number")
+parser.add_argument("--build", "--paper-build", "--purpur-build", type=int, help="If you're using Paper or Purpur, you can use this option to select a specifc build number")
 parser.add_argument("-p", "--port", type=int, help="The port the server will run on", default=25565)
 parser.add_argument("-m", "--motd", type=str, help="The server MOTD", default="A Minecraft Server")
 parser.add_argument("--disable-online-mode", "--disable-online", action="store_const", help="Online mode (the most secure way of authenticating players) will be disabled if this flag is used", const=True, default=False)
@@ -384,7 +385,26 @@ try:
 
     server_file = None
     info(f"Searching for {software.title()} {version}...")
-    if software == "paper":
+    if software == "purpur":
+        builds_url = f"https://api.purpurmc.org/v2/purpur/{version}"
+        r = get_url(builds_url, f"Purpur build list for {version}.")
+        j = r.json()
+        if build:
+            if str(build) not in j["builds"]["all"]:
+                fatal(f"Purpur build {build} doesn't exist for {version}")
+        else:
+            build = j["builds"]["latest"]
+        download_url = f"https://api.purpurmc.org/v2/purpur/{version}/{build}/download"
+        r = get_url(download_url, "Purpur jar")
+        file_name = f"purpur-{version}-{build}.jar"
+        save_file(os.path.join(directory, file_name), r.content)
+        info("Saved jarfile!")
+        if args.geyser: get_spigot_geyser(directory)
+        if args.floodgate: get_spigot_floodgate(directory)
+        info("Writing startup script...")
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + aikars_flags(file_name))
+
+    elif software == "paper":
         builds_url = f"https://api.papermc.io/v2/projects/paper/versions/{version}/builds/"
         r = get_url(builds_url, f"Paper builds for {version}")
         j = r.json()
@@ -402,7 +422,7 @@ try:
                 if b["build"] == build:
                     break
             else:
-                fatal("The selected build could not be found.")
+                fatal(f"Paper build {build} doesn't exist for {version}.")
         else:
             selected = builds[-1]
         download_info = selected["downloads"]["application"]
@@ -414,7 +434,7 @@ try:
         if args.geyser: get_spigot_geyser(directory)
         if args.floodgate: get_spigot_floodgate(directory)
         info("Writing startup script...")
-        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + f'java -Xms$RAM_MIN -Xmx$RAM_MAX -XX:+UseG1GC -XX:+ParallelRefProcEnabled -XX:MaxGCPauseMillis=200 -XX:+UnlockExperimentalVMOptions -XX:+DisableExplicitGC -XX:+AlwaysPreTouch -XX:G1NewSizePercent=30 -XX:G1MaxNewSizePercent=40 -XX:G1HeapRegionSize=8M -XX:G1ReservePercent=20 -XX:G1HeapWastePercent=5 -XX:G1MixedGCCountTarget=4 -XX:InitiatingHeapOccupancyPercent=15 -XX:G1MixedGCLiveThresholdPercent=90 -XX:G1RSetUpdatingPauseTimePercent=5 -XX:SurvivorRatio=32 -XX:+PerfDisableSharedMem -XX:MaxTenuringThreshold=1 -Dusing.aikars.flags=https://mcflags.emc.gs -Daikars.new.flags=true -jar {download_info["name"]} --nogui\n')
+        save_file(os.path.join(directory, "start.sh"), get_part_startup_linux(directory, args.ram_min, args.ram_max) + aikars_flags(download_info["name"]))
 
     elif software == "spigot":
         try:
