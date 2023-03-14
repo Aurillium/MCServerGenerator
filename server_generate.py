@@ -280,8 +280,12 @@ parser.add_argument("--agree-eula", action="store_const", help="Automatically ag
 parser.add_argument("-j", "--java", "--jre", action="store_const", help="Install the Adoptium JRE in the server directory", const=True, default=False)
 parser.add_argument("-y", "--force-create", action="store_const", help="Use a directory even if it already has files in it", const=True, default=False)
 
+help_flag = True
+
 try:
+    # If we get to the `finally`` here we know it's because the user used `--help`
     args = parser.parse_args()
+    help_flag = False
 
     if not args.ram_min:
         args.ram_min = args.ram_max
@@ -568,7 +572,8 @@ except Exception as e:
     info("Exitting now...")
     raise e
 finally:
-    if SUCCESS:
-        print("Installation successful!")
-    else:
-        print("Installation failed. Read the log to find out what went wrong.")
+    if not help_flag:
+        if SUCCESS:
+            print("Installation successful!")
+        else:
+            print("Installation failed. Read the log to find out what went wrong.")
